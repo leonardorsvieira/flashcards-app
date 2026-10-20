@@ -3,6 +3,7 @@ import { ScrollView } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useStore } from '@/data';
 import { Button, Field } from '@/ui/components';
+import { confirmAsync } from '@/ui/confirm';
 import { space } from '@/ui/theme';
 
 export default function CardEdit() {
@@ -63,7 +64,10 @@ export default function CardEdit() {
           label="Delete card"
           disabled={busy}
           style={{ marginTop: space.sm }}
-          onPress={() => run(() => deleteCard(existing.id), () => router.back())}
+          onPress={async () => {
+            const ok = await confirmAsync('Excluir esta carta?', 'Isso não pode ser desfeito.');
+            if (ok) await run(() => deleteCard(existing.id), () => router.back());
+          }}
         />
       )}
     </ScrollView>
