@@ -1,4 +1,4 @@
-﻿import { FlatList, Text, View } from 'react-native';
+import { FlatList, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/auth';
 import { deckColor, useStore } from '@/data';
@@ -39,7 +39,7 @@ export default function DeckList() {
                 <Text numberOfLines={1} style={{ color: t.muted, marginTop: 2 }}>{item.deck.description}</Text>
               )}
               <Text style={{ color: t.muted, marginTop: 6, fontSize: 13 }}>
-                {item.total} cards  Â·  {item.toStudy} to study
+                {item.total} cards  ·  {item.toStudy} to study
               </Text>
             </View>
           </Panel>
