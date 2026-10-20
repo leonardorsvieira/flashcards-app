@@ -1,13 +1,11 @@
 import { FlatList, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useAuth } from '@/auth';
 import { deckColor, useStore } from '@/data';
 import { Empty, Fab, Panel } from '@/ui/components';
 import { space, useTheme } from '@/ui/theme';
 
 export default function DeckList() {
   const { summaries } = useStore();
-  const { status } = useAuth();
   const router = useRouter();
   const t = useTheme();
   return (
@@ -16,16 +14,6 @@ export default function DeckList() {
         data={summaries}
         keyExtractor={(x) => x.deck.id}
         contentContainerStyle={{ padding: space.md, gap: space.sm, paddingBottom: 100 }}
-        ListHeaderComponent={
-          status === 'guest' ? (
-            <Panel onPress={() => router.push('/login')} style={{ borderColor: t.primary, borderWidth: 1 }}>
-              <Text style={{ color: t.text, fontWeight: '700' }}>Entrar ou criar conta</Text>
-              <Text style={{ color: t.muted, marginTop: 2 }}>
-                Salve seus baralhos na nuvem e acesse de qualquer aparelho.
-              </Text>
-            </Panel>
-          ) : null
-        }
         ListEmptyComponent={<Empty icon="albums-outline" title="No decks yet" hint="Tap + to create your first deck." />}
         renderItem={({ item }) => (
           <Panel

@@ -1,9 +1,13 @@
-import { Tabs } from 'expo-router';
+import { Pressable, Text } from 'react-native';
+import { Tabs, useRouter } from 'expo-router';
+import { useAuth } from '@/auth';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/ui/theme';
 
 export default function TabsLayout() {
   const t = useTheme();
+  const router = useRouter();
+  const { status } = useAuth();
   return (
     <Tabs
       screenOptions={{
@@ -18,7 +22,16 @@ export default function TabsLayout() {
     >
       <Tabs.Screen
         name="index"
-        options={{ title: 'Decks', tabBarIcon: ({ color, size }) => <Ionicons name="albums-outline" color={color as string} size={size} /> }}
+        options={{
+          title: 'Decks',
+          tabBarIcon: ({ color, size }) => <Ionicons name="albums-outline" color={color as string} size={size} />,
+          headerRight: () =>
+            status === 'guest' ? (
+              <Pressable onPress={() => router.push('/login')} hitSlop={10} style={{ marginRight: 16 }}>
+                <Text style={{ color: t.muted, fontSize: 14 }}>Entrar</Text>
+              </Pressable>
+            ) : null,
+        }}
       />
       <Tabs.Screen
         name="stats"
