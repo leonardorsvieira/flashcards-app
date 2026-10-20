@@ -149,7 +149,7 @@ export abstract class SnapshotRepository implements FlashcardRepository {
     return this.run(fn, false);
   }
 
-  private write<T>(fn: (s: RepositorySnapshot) => T): Promise<T> {
+  protected write<T>(fn: (s: RepositorySnapshot) => T): Promise<T> {
     return this.run(fn, true);
   }
 
@@ -384,6 +384,15 @@ export class AsyncStorageRepository extends SnapshotRepository {
     // Cache is only replaced after a successful write.
     await this.storage.setItem(this.storageKey, JSON.stringify(snapshot));
     this.cache = snapshot;
+  }
+
+  /** Replaces the whole dataset (queued with other writes). Used by cloud sync. */
+  replaceAll(next: RepositorySnapshot): Promise<void> {
+    return this.write((s) => {
+      s.decks = clone(next.decks);
+      s.cards = clone(next.cards);
+      s.reviews = clone(next.reviews);
+    });
   }
 
   /** Forgets the in-memory cache so the next call re-reads storage. */

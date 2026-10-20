@@ -1,7 +1,10 @@
+import { useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
+import { useRouter } from 'expo-router';
+import { useAuth } from '@/auth';
 import { countCards, retentionRate, reviewsPerDay, studiedToday, studyStreak } from '@/core';
-import { useStore } from '@/data';
-import { Panel, Stat } from '@/ui/components';
+import { syncStatusLabel, useStore } from '@/data';
+import { Button, Panel, Stat } from '@/ui/components';
 import { radius, space, useTheme } from '@/ui/theme';
 
 const LETTERS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
@@ -12,7 +15,10 @@ function weekday(dayKey: string): string {
 }
 
 export default function Stats() {
-  const { reviews, cards, decks } = useStore();
+  const { reviews, cards, decks, sync } = useStore();
+  const { status, user, signOut } = useAuth();
+  const router = useRouter();
+  const [leaving, setLeaving] = useState(false);
   const t = useTheme();
   const now = Date.now();
   const today = studiedToday(reviews, now);
@@ -55,6 +61,48 @@ export default function Stats() {
             </View>
           ))}
         </View>
+      </Panel>
+      <Panel>
+        <Text style={{ color: t.text, fontWeight: '700' }}>Conta</Text>
+        {status === 'signedIn' ? (
+          <>
+            <Text style={{ color: t.muted, marginTop: space.xs }}>{user?.email}</Text>
+            <Text style={{ color: sync.status === 'error' || sync.status === 'offline' ? t.danger : t.muted, marginTop: space.xs }}>
+              {syncStatusLabel(sync.status, sync.lastSyncedAt)}
+            </Text>
+            <View style={{ flexDirection: 'row', gap: space.sm, marginTop: space.md }}>
+              <Button
+                variant="secondary"
+                label="Sincronizar agora"
+                disabled={sync.status === 'syncing' || leaving}
+                onPress={() => void sync.syncNow()}
+                style={{ flex: 1 }}
+              />
+              <Button
+                variant="danger"
+                label="Sair"
+                disabled={leaving}
+                onPress={async () => {
+                  setLeaving(true);
+                  try {
+                    await sync.syncNow(); // best effort: push pending changes before leaving
+                    await signOut();
+                  } finally {
+                    setLeaving(false);
+                  }
+                }}
+                style={{ flex: 1 }}
+              />
+            </View>
+          </>
+        ) : (
+          <>
+            <Text style={{ color: t.muted, marginTop: space.xs }}>
+              Modo local: seus dados ficam só neste dispositivo.
+            </Text>
+            <Button label="Entrar ou criar conta" onPress={() => router.push('/login')} style={{ marginTop: space.md }} />
+          </>
+        )}
       </Panel>
     </ScrollView>
   );

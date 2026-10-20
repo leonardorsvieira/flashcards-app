@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { useAuth } from '@/auth';
 import {
   AsyncStorageRepository,
   buildDeckStudyQueue,
@@ -12,10 +13,9 @@ import {
 } from '@/core';
 import { SEED_CARDS, SEED_DECK_NAME } from '@/utils/seed';
 import { deckColors } from '@/ui/theme';
-
-const SEEDED_KEY = '@flashcards/seeded/v1';
-
-const repo = new AsyncStorageRepository(AsyncStorage);
+import { SyncEngine } from './syncEngine';
+import { supabaseRemote } from './syncRemote';
+import { dataKeyFor, isSnapshotEmpty, seededKeyFor, type SyncStatus } from './syncLogic';
 
 /** Decks carry no color in the core model, so derive a stable one from the id. */
 export function deckColor(deckId: string): string {
@@ -37,7 +37,16 @@ interface Data {
   reviews: Review[];
 }
 
+export interface SyncInfo {
+  /** 'off' when running local-only (no account). */
+  status: SyncStatus;
+  lastSyncedAt: number | null;
+  /** Syncs right now (pushes pending changes / pulls remote). No-op in local-only mode. */
+  syncNow(): Promise<void>;
+}
+
 interface Store extends Data {
+  sync: SyncInfo;
   summaries: DeckSummary[];
   saveDeck(input: { id?: string; name: string; description: string }): Promise<string>;
   deleteDeck(id: string): Promise<void>;
@@ -53,40 +62,71 @@ interface Store extends Data {
 
 const Ctx = createContext<Store | null>(null);
 
-async function readAll(): Promise<Data> {
+async function readAll(repo: AsyncStorageRepository): Promise<Data> {
   const [decks, cards, reviews] = await Promise.all([repo.listDecks(), repo.listCards(), repo.listReviews()]);
   return { decks, cards, reviews };
 }
 
-/** Creates the sample Portuguese deck once, on the very first launch. */
-async function seedOnFirstLaunch(): Promise<void> {
-  if (await AsyncStorage.getItem(SEEDED_KEY)) return;
+/** Creates the sample Portuguese deck once. Returns true if it was created. */
+async function seedSample(repo: AsyncStorageRepository, seededKey: string): Promise<boolean> {
+  if (await AsyncStorage.getItem(seededKey)) return false;
+  let created = false;
   if ((await repo.listDecks()).length === 0) {
     const deck = await repo.createDeck({
       name: SEED_DECK_NAME,
       description: 'Sample deck to get you started',
     });
     for (const c of SEED_CARDS) await repo.createCard({ deckId: deck.id, front: c.front, back: c.back });
+    created = true;
   }
-  await AsyncStorage.setItem(SEEDED_KEY, '1');
+  await AsyncStorage.setItem(seededKey, '1');
+  return created;
 }
 
+/** Picks the dataset for the current account (or the local-only guest dataset). */
 export function StoreProvider({ children }: { children: React.ReactNode }) {
+  const { status, user } = useAuth();
+  if (status === 'loading') return null;
+  const userId = status === 'signedIn' && user ? user.id : null;
+  // Remount per account so data never leaks between users on the same device.
+  return (
+    <StoreInner key={userId ?? 'guest'} userId={userId}>
+      {children}
+    </StoreInner>
+  );
+}
+
+function StoreInner({ userId, children }: { userId: string | null; children: React.ReactNode }) {
   const [data, setData] = useState<Data | null>(null);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>(userId ? 'syncing' : 'off');
+  const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const mounted = useRef(true);
+  const repo = useMemo(() => new AsyncStorageRepository(AsyncStorage, { storageKey: dataKeyFor(userId) }), [userId]);
+  const engineRef = useRef<SyncEngine | null>(null);
 
   const refresh = useCallback(async () => {
-    const next = await readAll();
+    const next = await readAll(repo);
     if (mounted.current) setData(next);
-  }, []);
+  }, [repo]);
+
+  /** Call after every local mutation: schedules a cloud push and refreshes the UI. */
+  const changed = useCallback(async () => {
+    await engineRef.current?.markDirty();
+    await refresh();
+  }, [refresh]);
 
   useEffect(() => {
     mounted.current = true;
+    let engine: SyncEngine | null = null;
     (async () => {
-      try {
-        await seedOnFirstLaunch();
-      } catch (e) {
-        console.warn('Seeding failed', e);
+      const seededKey = seededKeyFor(userId);
+      // Local-only mode seeds immediately. Accounts seed only after confirming the cloud is empty.
+      if (!userId) {
+        try {
+          await seedSample(repo, seededKey);
+        } catch (e) {
+          console.warn('Seeding failed', e);
+        }
       }
       try {
         await refresh();
@@ -94,53 +134,89 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         console.warn('Loading data failed', e);
         if (mounted.current) setData({ decks: [], cards: [], reviews: [] });
       }
+      if (!userId || !mounted.current) return;
+
+      engine = new SyncEngine({
+        userId,
+        storage: AsyncStorage,
+        remote: supabaseRemote(userId),
+        local: {
+          read: async () => ({ version: 1 as const, ...(await readAll(repo)) }),
+          replace: (snapshot) => repo.replaceAll(snapshot),
+        },
+        onStatus: (st, at) => {
+          if (!mounted.current) return;
+          setSyncStatus(st);
+          setLastSyncedAt(at);
+        },
+        onRemoteApplied: () => void refresh().catch(() => undefined),
+      });
+      engineRef.current = engine;
+      const result = await engine.reconcile();
+      if (mounted.current && result.action !== 'failed' && !result.remotePresent) {
+        try {
+          const local = await readAll(repo);
+          if (isSnapshotEmpty({ version: 1, ...local }) && (await seedSample(repo, seededKey))) {
+            await engine.markDirty();
+            await refresh();
+          }
+        } catch (e) {
+          console.warn('Seeding failed', e);
+        }
+      }
     })();
     return () => {
       mounted.current = false;
+      engine?.dispose();
+      engineRef.current = null;
     };
-  }, [refresh]);
+  }, [repo, userId, refresh]);
+
+  const syncNow = useCallback(async () => {
+    await engineRef.current?.reconcile();
+  }, []);
 
   const saveDeck: Store['saveDeck'] = useCallback(
     async ({ id, name, description }) => {
       const deck = id ? await repo.updateDeck(id, { name, description }) : await repo.createDeck({ name, description });
-      await refresh();
+      await changed();
       return deck.id;
     },
-    [refresh],
+    [repo, changed],
   );
 
   const deleteDeck = useCallback(
     async (id: string) => {
       await repo.deleteDeck(id);
-      await refresh();
+      await changed();
     },
-    [refresh],
+    [repo, changed],
   );
 
   const saveCard: Store['saveCard'] = useCallback(
     async ({ id, deckId, front, back }) => {
       if (id) await repo.updateCard(id, { front, back });
       else await repo.createCard({ deckId, front, back });
-      await refresh();
+      await changed();
     },
-    [refresh],
+    [repo, changed],
   );
 
   const deleteCard = useCallback(
     async (id: string) => {
       await repo.deleteCard(id);
-      await refresh();
+      await changed();
     },
-    [refresh],
+    [repo, changed],
   );
 
   const grade: Store['grade'] = useCallback(
     async (cardId, g, durationMs) => {
       const { card } = await recordReview(repo, cardId, g, Date.now(), { durationMs });
-      await refresh();
+      await changed();
       return card;
     },
-    [refresh],
+    [repo, changed],
   );
 
   const importCards: Store['importCards'] = useCallback(
@@ -153,11 +229,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           added++;
         }
       } finally {
-        await refresh();
+        if (added > 0) await changed();
+        else await refresh();
       }
       return added;
     },
-    [refresh],
+    [repo, changed, refresh],
   );
 
   const value = useMemo<Store | null>(() => {
@@ -172,8 +249,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       total: data.cards.filter((c) => c.deckId === deck.id).length,
       toStudy: studyQueue(deck.id).cards.length,
     }));
-    return { ...data, summaries, saveDeck, deleteDeck, saveCard, deleteCard, studyQueue, grade, importCards };
-  }, [data, saveDeck, deleteDeck, saveCard, deleteCard, grade, importCards]);
+    const sync: SyncInfo = { status: syncStatus, lastSyncedAt, syncNow };
+    return { ...data, sync, summaries, saveDeck, deleteDeck, saveCard, deleteCard, studyQueue, grade, importCards };
+  }, [data, syncStatus, lastSyncedAt, syncNow, saveDeck, deleteDeck, saveCard, deleteCard, grade, importCards]);
 
   // Render nothing until the first load (and seeding) finishes so screens never see an empty store.
   if (!value) return null;
