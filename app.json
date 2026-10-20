@@ -1,0 +1,13 @@
+{
+  "expo": {
+    "name": "Flashcards",
+    "slug": "flashcards-app",
+    "scheme": "flashcards",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "ios": { "supportsTablet": true, "bundleIdentifier": "com.example.flashcards" },
+    "android": { "package": "com.example.flashcards" },
+    "plugins": ["expo-router"]
+  }
+}
