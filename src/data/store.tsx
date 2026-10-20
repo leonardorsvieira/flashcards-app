@@ -11,11 +11,10 @@ import {
   type Review,
   type StudyQueue,
 } from '@/core';
-import { SEED_CARDS, SEED_DECK_NAME } from '@/utils/seed';
 import { deckColors } from '@/ui/theme';
 import { SyncEngine } from './syncEngine';
 import { supabaseRemote } from './syncRemote';
-import { dataKeyFor, isSnapshotEmpty, seededKeyFor, type SyncStatus } from './syncLogic';
+import { dataKeyFor, type SyncStatus } from './syncLogic';
 
 /** Decks carry no color in the core model, so derive a stable one from the id. */
 export function deckColor(deckId: string): string {
@@ -67,22 +66,6 @@ async function readAll(repo: AsyncStorageRepository): Promise<Data> {
   return { decks, cards, reviews };
 }
 
-/** Creates the sample Portuguese deck once. Returns true if it was created. */
-async function seedSample(repo: AsyncStorageRepository, seededKey: string): Promise<boolean> {
-  if (await AsyncStorage.getItem(seededKey)) return false;
-  let created = false;
-  if ((await repo.listDecks()).length === 0) {
-    const deck = await repo.createDeck({
-      name: SEED_DECK_NAME,
-      description: 'Sample deck to get you started',
-    });
-    for (const c of SEED_CARDS) await repo.createCard({ deckId: deck.id, front: c.front, back: c.back });
-    created = true;
-  }
-  await AsyncStorage.setItem(seededKey, '1');
-  return created;
-}
-
 /** Picks the dataset for the current account (or the local-only guest dataset). */
 export function StoreProvider({ children }: { children: React.ReactNode }) {
   const { status, user } = useAuth();
@@ -119,15 +102,6 @@ function StoreInner({ userId, children }: { userId: string | null; children: Rea
     mounted.current = true;
     let engine: SyncEngine | null = null;
     (async () => {
-      const seededKey = seededKeyFor(userId);
-      // Local-only mode seeds immediately. Accounts seed only after confirming the cloud is empty.
-      if (!userId) {
-        try {
-          await seedSample(repo, seededKey);
-        } catch (e) {
-          console.warn('Seeding failed', e);
-        }
-      }
       try {
         await refresh();
       } catch (e) {
@@ -152,18 +126,7 @@ function StoreInner({ userId, children }: { userId: string | null; children: Rea
         onRemoteApplied: () => void refresh().catch(() => undefined),
       });
       engineRef.current = engine;
-      const result = await engine.reconcile();
-      if (mounted.current && result.action !== 'failed' && !result.remotePresent) {
-        try {
-          const local = await readAll(repo);
-          if (isSnapshotEmpty({ version: 1, ...local }) && (await seedSample(repo, seededKey))) {
-            await engine.markDirty();
-            await refresh();
-          }
-        } catch (e) {
-          console.warn('Seeding failed', e);
-        }
-      }
+      await engine.reconcile();
     })();
     return () => {
       mounted.current = false;

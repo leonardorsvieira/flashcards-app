@@ -7,7 +7,7 @@ import { useTheme } from '@/ui/theme';
 export default function TabsLayout() {
   const t = useTheme();
   const router = useRouter();
-  const { status } = useAuth();
+  const { status, signOut } = useAuth();
   return (
     <Tabs
       screenOptions={{
@@ -29,6 +29,10 @@ export default function TabsLayout() {
             status === 'guest' ? (
               <Pressable onPress={() => router.push('/login')} hitSlop={10} style={{ marginRight: 16 }}>
                 <Text style={{ color: t.muted, fontSize: 14 }}>Entrar</Text>
+              </Pressable>
+            ) : status === 'signedIn' ? (
+              <Pressable onPress={() => void signOut()} hitSlop={10} style={{ marginRight: 16 }}>
+                <Text style={{ color: t.muted, fontSize: 14 }}>Sair</Text>
               </Pressable>
             ) : null,
         }}
