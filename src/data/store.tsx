@@ -1,112 +1,182 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { localRepository } from './localRepository';
-import type { FlashcardsRepository, Snapshot } from './repository';
-import type { Card, Deck, DeckSummary, Grade, Review } from './types';
+import {
+  AsyncStorageRepository,
+  buildDeckStudyQueue,
+  recordReview,
+  type Card,
+  type Deck,
+  type Grade,
+  type Review,
+  type StudyQueue,
+} from '@/core';
+import { SEED_CARDS, SEED_DECK_NAME } from '@/utils/seed';
+import { deckColors } from '@/ui/theme';
 
-// Swap the repository here when src/core is wired in.
-const repo: FlashcardsRepository = localRepository;
+const SEEDED_KEY = '@flashcards/seeded/v1';
 
-const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+const repo = new AsyncStorageRepository(AsyncStorage);
 
-interface Store extends Snapshot {
-  ready: boolean;
+/** Decks carry no color in the core model, so derive a stable one from the id. */
+export function deckColor(deckId: string): string {
+  let h = 0;
+  for (let i = 0; i < deckId.length; i++) h = (h * 31 + deckId.charCodeAt(i)) >>> 0;
+  return deckColors[h % deckColors.length];
+}
+
+export interface DeckSummary {
+  deck: Deck;
+  total: number;
+  /** Cards in today's study queue (limits applied). */
+  toStudy: number;
+}
+
+interface Data {
+  decks: Deck[];
+  cards: Card[];
+  reviews: Review[];
+}
+
+interface Store extends Data {
   summaries: DeckSummary[];
-  saveDeck(input: { id?: string; name: string; description: string; color: string }): string;
-  deleteDeck(id: string): void;
-  saveCard(input: { id?: string; deckId: string; front: string; back: string }): void;
-  deleteCard(id: string): void;
-  dueCards(deckId: string): Card[];
-  grade(cardId: string, grade: Grade): void;
+  saveDeck(input: { id?: string; name: string; description: string }): Promise<string>;
+  deleteDeck(id: string): Promise<void>;
+  saveCard(input: { id?: string; deckId: string; front: string; back: string }): Promise<void>;
+  deleteCard(id: string): Promise<void>;
+  /** Cards to study now for a deck, honoring daily limits. */
+  studyQueue(deckId: string): StudyQueue;
+  /** Grades a card and returns its updated version. */
+  grade(cardId: string, grade: Grade, durationMs?: number): Promise<Card>;
+  /** Adds cards to a deck; rows with an empty front or back are skipped. Returns how many were added. */
+  importCards(deckId: string, rows: { front: string; back: string }[]): Promise<number>;
 }
 
 const Ctx = createContext<Store | null>(null);
 
+async function readAll(): Promise<Data> {
+  const [decks, cards, reviews] = await Promise.all([repo.listDecks(), repo.listCards(), repo.listReviews()]);
+  return { decks, cards, reviews };
+}
+
+/** Creates the sample Portuguese deck once, on the very first launch. */
+async function seedOnFirstLaunch(): Promise<void> {
+  if (await AsyncStorage.getItem(SEEDED_KEY)) return;
+  if ((await repo.listDecks()).length === 0) {
+    const deck = await repo.createDeck({
+      name: SEED_DECK_NAME,
+      description: 'Sample deck to get you started',
+    });
+    for (const c of SEED_CARDS) await repo.createCard({ deckId: deck.id, front: c.front, back: c.back });
+  }
+  await AsyncStorage.setItem(SEEDED_KEY, '1');
+}
+
 export function StoreProvider({ children }: { children: React.ReactNode }) {
-  const [data, setData] = useState<Snapshot>({ decks: [], cards: [], reviews: [] });
-  const [ready, setReady] = useState(false);
-  const loaded = useRef(false);
+  const [data, setData] = useState<Data | null>(null);
+  const mounted = useRef(true);
 
-  useEffect(() => {
-    repo.load().then((d) => {
-      setData(d);
-      loaded.current = true;
-      setReady(true);
-    });
+  const refresh = useCallback(async () => {
+    const next = await readAll();
+    if (mounted.current) setData(next);
   }, []);
 
   useEffect(() => {
-    if (loaded.current) repo.save(data);
-  }, [data]);
-
-  const saveDeck: Store['saveDeck'] = useCallback((input) => {
-    const id = input.id ?? uid();
-    setData((d) => {
-      const existing = d.decks.find((x) => x.id === id);
-      if (existing) {
-        const deck: Deck = { ...existing, name: input.name, description: input.description, color: input.color };
-        return { ...d, decks: d.decks.map((x) => (x.id === id ? deck : x)) };
+    mounted.current = true;
+    (async () => {
+      try {
+        await seedOnFirstLaunch();
+      } catch (e) {
+        console.warn('Seeding failed', e);
       }
-      const deck: Deck = { id, name: input.name, description: input.description, color: input.color, createdAt: Date.now() };
-      return { ...d, decks: [...d.decks, deck] };
-    });
-    return id;
-  }, []);
-
-  const deleteDeck = useCallback((id: string) => {
-    setData((d) => ({
-      decks: d.decks.filter((x) => x.id !== id),
-      cards: d.cards.filter((c) => c.deckId !== id),
-      reviews: d.reviews.filter((r) => r.deckId !== id),
-    }));
-  }, []);
-
-  const saveCard: Store['saveCard'] = useCallback((input) => {
-    setData((d) => {
-      if (input.id) {
-        return { ...d, cards: d.cards.map((c) => (c.id === input.id ? { ...c, front: input.front, back: input.back } : c)) };
+      try {
+        await refresh();
+      } catch (e) {
+        console.warn('Loading data failed', e);
+        if (mounted.current) setData({ decks: [], cards: [], reviews: [] });
       }
-      const now = Date.now();
-      const card: Card = {
-        id: uid(), deckId: input.deckId, front: input.front, back: input.back,
-        createdAt: now, ease: 2.5, intervalDays: 0, reps: 0, due: now,
-      };
-      return { ...d, cards: [...d.cards, card] };
-    });
-  }, []);
-
-  const deleteCard = useCallback((id: string) => {
-    setData((d) => ({ ...d, cards: d.cards.filter((c) => c.id !== id), reviews: d.reviews.filter((r) => r.cardId !== id) }));
-  }, []);
-
-  const grade: Store['grade'] = useCallback((cardId, g) => {
-    setData((d) => {
-      const card = d.cards.find((c) => c.id === cardId);
-      if (!card) return d;
-      const now = Date.now();
-      const next = repo.schedule(card, g, now);
-      const review: Review = { id: uid(), cardId, deckId: card.deckId, grade: g, reviewedAt: now };
-      return { ...d, cards: d.cards.map((c) => (c.id === cardId ? next : c)), reviews: [...d.reviews, review] };
-    });
-  }, []);
-
-  const value = useMemo<Store>(() => {
-    const now = Date.now();
-    const summaries = data.decks.map((deck) => {
-      const cs = data.cards.filter((c) => c.deckId === deck.id);
-      return {
-        deck,
-        total: cs.length,
-        due: cs.filter((c) => c.reps > 0 && c.due <= now).length,
-        fresh: cs.filter((c) => c.reps === 0 && c.due <= now).length,
-      };
-    });
-    return {
-      ...data, ready, summaries, saveDeck, deleteDeck, saveCard, deleteCard, grade,
-      dueCards: (deckId) =>
-        data.cards.filter((c) => c.deckId === deckId && c.due <= Date.now()).sort((a, b) => a.due - b.due),
+    })();
+    return () => {
+      mounted.current = false;
     };
-  }, [data, ready, saveDeck, deleteDeck, saveCard, deleteCard, grade]);
+  }, [refresh]);
 
+  const saveDeck: Store['saveDeck'] = useCallback(
+    async ({ id, name, description }) => {
+      const deck = id ? await repo.updateDeck(id, { name, description }) : await repo.createDeck({ name, description });
+      await refresh();
+      return deck.id;
+    },
+    [refresh],
+  );
+
+  const deleteDeck = useCallback(
+    async (id: string) => {
+      await repo.deleteDeck(id);
+      await refresh();
+    },
+    [refresh],
+  );
+
+  const saveCard: Store['saveCard'] = useCallback(
+    async ({ id, deckId, front, back }) => {
+      if (id) await repo.updateCard(id, { front, back });
+      else await repo.createCard({ deckId, front, back });
+      await refresh();
+    },
+    [refresh],
+  );
+
+  const deleteCard = useCallback(
+    async (id: string) => {
+      await repo.deleteCard(id);
+      await refresh();
+    },
+    [refresh],
+  );
+
+  const grade: Store['grade'] = useCallback(
+    async (cardId, g, durationMs) => {
+      const { card } = await recordReview(repo, cardId, g, Date.now(), { durationMs });
+      await refresh();
+      return card;
+    },
+    [refresh],
+  );
+
+  const importCards: Store['importCards'] = useCallback(
+    async (deckId, rows) => {
+      let added = 0;
+      try {
+        for (const r of rows) {
+          if (!r.front.trim() || !r.back.trim()) continue;
+          await repo.createCard({ deckId, front: r.front, back: r.back });
+          added++;
+        }
+      } finally {
+        await refresh();
+      }
+      return added;
+    },
+    [refresh],
+  );
+
+  const value = useMemo<Store | null>(() => {
+    if (!data) return null;
+    const studyQueue = (deckId: string): StudyQueue => {
+      const deck = data.decks.find((d) => d.id === deckId);
+      if (!deck) return buildDeckStudyQueue({ id: deckId, newCardsPerDay: 0, reviewsPerDay: 0 }, [], [], Date.now());
+      return buildDeckStudyQueue(deck, data.cards, data.reviews, Date.now());
+    };
+    const summaries = data.decks.map((deck) => ({
+      deck,
+      total: data.cards.filter((c) => c.deckId === deck.id).length,
+      toStudy: studyQueue(deck.id).cards.length,
+    }));
+    return { ...data, summaries, saveDeck, deleteDeck, saveCard, deleteCard, studyQueue, grade, importCards };
+  }, [data, saveDeck, deleteDeck, saveCard, deleteCard, grade, importCards]);
+
+  // Render nothing until the first load (and seeding) finishes so screens never see an empty store.
+  if (!value) return null;
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 

@@ -12,7 +12,18 @@ export default function CardEdit() {
   const existing = cards.find((c) => c.id === id);
   const [front, setFront] = useState(existing?.front ?? '');
   const [back, setBack] = useState(existing?.back ?? '');
-  const valid = !!front.trim() && !!back.trim();
+  const [busy, setBusy] = useState(false);
+  const valid = !!front.trim() && !!back.trim() && !busy;
+
+  const run = async (fn: () => Promise<void>, after: () => void) => {
+    setBusy(true);
+    try {
+      await fn();
+      after();
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <ScrollView contentContainerStyle={{ padding: space.md }} keyboardShouldPersistTaps="handled">
@@ -22,10 +33,12 @@ export default function CardEdit() {
       <Button
         label="Save"
         disabled={!valid}
-        onPress={() => {
-          saveCard({ id: existing?.id, deckId: existing?.deckId ?? deckId, front: front.trim(), back: back.trim() });
-          router.back();
-        }}
+        onPress={() =>
+          run(
+            () => saveCard({ id: existing?.id, deckId: existing?.deckId ?? deckId, front: front.trim(), back: back.trim() }),
+            () => router.back(),
+          )
+        }
       />
       {!existing && (
         <Button
@@ -33,22 +46,24 @@ export default function CardEdit() {
           label="Save and add another"
           disabled={!valid}
           style={{ marginTop: space.sm }}
-          onPress={() => {
-            saveCard({ deckId, front: front.trim(), back: back.trim() });
-            setFront('');
-            setBack('');
-          }}
+          onPress={() =>
+            run(
+              () => saveCard({ deckId, front: front.trim(), back: back.trim() }),
+              () => {
+                setFront('');
+                setBack('');
+              },
+            )
+          }
         />
       )}
       {existing && (
         <Button
           variant="danger"
           label="Delete card"
+          disabled={busy}
           style={{ marginTop: space.sm }}
-          onPress={() => {
-            deleteCard(existing.id);
-            router.back();
-          }}
+          onPress={() => run(() => deleteCard(existing.id), () => router.back())}
         />
       )}
     </ScrollView>

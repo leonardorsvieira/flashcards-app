@@ -6,8 +6,16 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
-    "ios": { "supportsTablet": true, "bundleIdentifier": "com.example.flashcards" },
-    "android": { "package": "com.example.flashcards" },
-    "plugins": ["expo-router"]
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.example.flashcards"
+    },
+    "android": {
+      "package": "com.example.flashcards"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-sharing"
+    ]
   }
 }
