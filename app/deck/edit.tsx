@@ -3,6 +3,7 @@ import { ScrollView } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useStore } from '@/data';
 import { Button, Field } from '@/ui/components';
+import { confirmAsync } from '@/ui/confirm';
 import { space } from '@/ui/theme';
 
 export default function DeckEdit() {
@@ -46,6 +47,7 @@ export default function DeckEdit() {
           style={{ marginTop: space.sm }}
           onPress={() =>
             run(async () => {
+              if (!(await confirmAsync(`Excluir "${existing.name}"?`, 'O baralho e todas as suas cartas serão apagados. Isso não pode ser desfeito.'))) return;
               await deleteDeck(existing.id);
               router.dismissTo('/');
             })

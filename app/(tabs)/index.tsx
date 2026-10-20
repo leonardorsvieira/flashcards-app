@@ -1,11 +1,13 @@
-import { FlatList, Text, View } from 'react-native';
+import { FlatList, Pressable, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { deckColor, useStore } from '@/data';
 import { Empty, Fab, Panel } from '@/ui/components';
+import { confirmAsync } from '@/ui/confirm';
 import { space, useTheme } from '@/ui/theme';
 
 export default function DeckList() {
-  const { summaries } = useStore();
+  const { summaries, deleteDeck } = useStore();
   const router = useRouter();
   const t = useTheme();
   return (
@@ -30,6 +32,16 @@ export default function DeckList() {
                 {item.total} cards  ·  {item.toStudy} to study
               </Text>
             </View>
+            <Pressable
+              accessibilityLabel="Excluir baralho"
+              hitSlop={10}
+              onPress={async () => {
+                const ok = await confirmAsync(`Excluir "${item.deck.name}"?`, 'O baralho e todas as suas cartas serão apagados. Isso não pode ser desfeito.');
+                if (ok) await deleteDeck(item.deck.id);
+              }}
+            >
+              <Ionicons name="trash-outline" size={20} color={t.muted} />
+            </Pressable>
           </Panel>
         )}
       />
