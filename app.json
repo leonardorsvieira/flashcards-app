@@ -17,6 +17,13 @@
       "expo-router",
       "expo-sharing",
       "expo-status-bar"
-    ]
+    ],
+    "web": {
+      "bundler": "metro",
+      "output": "single"
+    },
+    "experiments": {
+      "baseUrl": "/flashcards-app"
+    }
   }
 }
